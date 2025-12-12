@@ -67,6 +67,8 @@ class WebPageDownloader:
         try:
             response = self.session.get(self.url, timeout=30)
             response.raise_for_status()
+            # Ensure proper encoding
+            response.encoding = response.apparent_encoding or 'utf-8'
             return response.text
         except requests.RequestException as e:
             raise Exception(f"Failed to download page: {e}")
@@ -145,20 +147,24 @@ class MetadataExtractor:
         """Clean up title by removing version numbers and weird formatting"""
         if not title:
             return "Untitled Document"
-
+        
+        # Fix common encoding issues
+        title = title.replace('â', "'").replace('â', '"').replace('â', '"')
+        title = title.replace('â', '—').replace('â¢', '•').replace('Â', '')
+        
         # Remove version numbers at the start (e.g., "30.3.7", "1.2.3")
         title = re.sub(r'^\d+(\.\d+)*\.?\s*', '', title)
-
+        
         # Remove common separators and site names at the end
         title = re.split(r'\s*[\|•·\-–—]\s*', title)[0]
-
+        
         # Clean up whitespace
         title = re.sub(r'\s+', ' ', title).strip()
-
+        
         # Capitalize first letter if all lowercase or all uppercase
         if title.islower() or title.isupper():
             title = title.title()
-
+        
         return title or "Untitled Document"
 
     def _get_author(self):
@@ -391,18 +397,27 @@ class ContentProcessor:
         """Clean and normalize content"""
         if not content:
             return self.soup
-
+        
         # Remove comments
         for comment in content.find_all(string=lambda text: isinstance(text, type(lambda: None))):
             if hasattr(comment, 'extract'):
                 comment.extract()
-
+        
+        # Fix encoding issues in text nodes
+        for text_node in content.find_all(string=True):
+            if text_node.parent.name not in ['script', 'style']:
+                fixed_text = str(text_node)
+                fixed_text = fixed_text.replace('â', "'").replace('â', '"').replace('â', '"')
+                fixed_text = fixed_text.replace('â', '—').replace('â¢', '•').replace('Â', ' ')
+                if fixed_text != str(text_node):
+                    text_node.replace_with(fixed_text)
+        
         # Make all URLs absolute
         for tag in content.find_all(['a', 'img', 'link']):
             for attr in ['href', 'src']:
                 if tag.get(attr):
                     tag[attr] = urljoin(self.base_url, tag[attr])
-
+        
         return content
 
     def get_images(self, content):
@@ -1164,15 +1179,20 @@ class Web2Ebook:
         toc_entries = []
 
         for idx, chapter_data in enumerate(chapters, 1):
+            # Create chapter
             chapter = epub.EpubHtml(
                 title=chapter_data['title'],
                 file_name=f'chapter_{idx}.xhtml',
                 lang=metadata['language']
             )
-
+        
             # Process content to improve code blocks
             content_html = str(chapter_data['content'])
-
+        
+            # Fix any remaining encoding issues
+            content_html = content_html.replace('â', "'").replace('â', '"').replace('â', '"')
+            content_html = content_html.replace('â', '—').replace('â¢', '•').replace('Â', ' ')
+        
             # Wrap code blocks better - find <pre> tags without <code> inside
             content_html = re.sub(
                 r'<pre(?![^>]*class=["\'])(.*?)>(.*?)</pre>',
@@ -1180,7 +1200,7 @@ class Web2Ebook:
                 content_html,
                 flags=re.DOTALL
             )
-
+        
             chapter.content = f"<h1>{chapter_data['title']}</h1>" + content_html
             chapter.add_item(nav_css)
 
