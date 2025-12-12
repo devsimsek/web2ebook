@@ -190,6 +190,48 @@ python web2ebook.py https://example.com/article --no-cover
 python web2ebook.py https://example.com/article --cover my_cover.png
 ```
 
+### Target Specific Content with CSS Selectors
+
+**Target specific container:**
+```bash
+python web2ebook.py https://example.com/article \
+  --content-selector "article.post-content"
+```
+
+**Remove unwanted elements:**
+```bash
+python web2ebook.py https://example.com/article \
+  --exclude-selectors ".comments" ".sidebar" "#ads"
+```
+
+**Combined example:**
+```bash
+# Get article content, remove comments and ads
+python web2ebook.py https://blog.example.com/post \
+  --content-selector "article" \
+  --exclude-selectors ".comments" ".related-posts" "aside"
+```
+
+**Common examples:**
+```bash
+# Medium article
+python web2ebook.py https://medium.com/@user/article \
+  --content-selector "article" \
+  --exclude-selectors ".pw-responses" "aside"
+
+# Dev.to post
+python web2ebook.py https://dev.to/user/post \
+  --content-selector "#article-body" \
+  --exclude-selectors ".comments"
+
+# Documentation site
+python web2ebook.py https://docs.example.com/guide \
+  --content-selector ".docs-content" \
+  --exclude-selectors "nav" ".toc" ".breadcrumbs"
+```
+
+See [SELECTORS.md](SELECTORS.md) for complete CSS selector guide.
+
 ### Complete Example
 
 ```bash
@@ -200,7 +242,9 @@ python web2ebook.py \
   --cover custom_cover.jpg \
   --crawl \
   --max-pages 20 \
-  --exclude-file exclude.txt
+  --exclude-file exclude.txt \
+  --content-selector "article" \
+  --exclude-selectors ".comments" ".ads"
 ```
 
 ## Command-Line Options
@@ -222,6 +266,8 @@ optional arguments:
   --exclude-file FILE   File containing URLs to exclude (one per line)
   --include [URL ...]   URLs or patterns to include when crawling (whitelist)
   --include-file FILE   File containing URLs to include (one per line)
+  --content-selector    CSS selector for main content (e.g., "article", "#main")
+  --exclude-selectors   CSS selectors for elements to remove (e.g., ".comments")
 ```
 
 ## How It Works

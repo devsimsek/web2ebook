@@ -355,20 +355,39 @@ class CoverGenerator:
 class ContentProcessor:
     """Process and clean HTML content for ebook conversion"""
 
-    def __init__(self, html_content, base_url):
+    def __init__(self, html_content, base_url, content_selector=None, exclude_selectors=None):
         self.soup = BeautifulSoup(html_content, 'html.parser')
         self.base_url = base_url
+        self.content_selector = content_selector
+        self.exclude_selectors = exclude_selectors or []
 
     def extract_main_content(self):
         """Extract main content from the page"""
-        # Remove unwanted elements
-        for element in self.soup(['script', 'style', 'nav', 'header', 'footer',
+        # Remove unwanted elements first
+        for element in self.soup(['script', 'style', 'nav', 'header', 'footer', 
                                    'aside', 'iframe', 'noscript']):
             element.decompose()
-
+        
+        # Remove user-specified excluded selectors
+        for selector in self.exclude_selectors:
+            try:
+                for element in self.soup.select(selector):
+                    element.decompose()
+            except Exception as e:
+                print(f"Warning: Invalid exclude selector '{selector}': {e}")
+        
         # Try to find main content area
         main_content = None
-
+        
+        # If user specified a content selector, use it
+        if self.content_selector:
+            try:
+                main_content = self.soup.select_one(self.content_selector)
+                if main_content:
+                    return main_content
+            except Exception as e:
+                print(f"Warning: Invalid content selector '{self.content_selector}': {e}")
+        
         # Try common content selectors
         content_selectors = [
             {'id': 'content'},
@@ -377,20 +396,20 @@ class ContentProcessor:
             'main',
             'article'
         ]
-
+        
         for selector in content_selectors:
             if isinstance(selector, str):
                 main_content = self.soup.find(selector)
             else:
                 main_content = self.soup.find(['div', 'main', 'article', 'section'], selector)
-
+            
             if main_content:
                 break
-
+        
         # If no main content found, use body
         if not main_content:
             main_content = self.soup.find('body') or self.soup
-
+        
         return main_content
 
     def clean_content(self, content):
@@ -709,7 +728,7 @@ class MOBIConverter:
 class Web2Ebook:
     """Main converter class"""
 
-    def __init__(self, url, output_dir=None, generate_cover=True, custom_cover=None, crawl=False, max_pages=10, exclude_urls=None, include_urls=None):
+    def __init__(self, url, output_dir=None, generate_cover=True, custom_cover=None, crawl=False, max_pages=10, exclude_urls=None, include_urls=None, content_selector=None, exclude_selectors=None):
         self.url = url
         self.output_dir = output_dir or os.getcwd()
         self.generate_cover = generate_cover
@@ -723,6 +742,8 @@ class Web2Ebook:
         self.exclude_patterns = self._compile_exclude_patterns()
         self.include_urls = set(include_urls) if include_urls else set()
         self.include_patterns = self._compile_include_patterns()
+        self.content_selector = content_selector
+        self.exclude_selectors = exclude_selectors or []
 
     def _extract_domain(self, url):
         """Extract base domain from URL"""
@@ -936,8 +957,8 @@ class Web2Ebook:
                     # Process content
                     current_status = "Processing content..."
                     live.update(generate_table())
-                    
-                    processor = ContentProcessor(html, current_url)
+
+                    processor = ContentProcessor(html, current_url, self.content_selector, self.exclude_selectors)
                     main_content = processor.extract_main_content()
                     clean_content = processor.clean_content(main_content)
                     
@@ -1301,7 +1322,7 @@ class Web2Ebook:
             print(f"✍️  Author: {metadata['author']}")
 
             # Process content
-            processor = ContentProcessor(html_content, url)
+            processor = ContentProcessor(html_content, url, self.content_selector, self.exclude_selectors)
             main_content = processor.extract_main_content()
             clean_content = processor.clean_content(main_content)
 
@@ -1454,6 +1475,18 @@ Copyright (c) devsimsek
         help='File containing URLs to include (one per line)'
     )
     
+    parser.add_argument(
+        '--content-selector',
+        help='CSS selector to target specific content container (e.g., "article", "#main-content")'
+    )
+    
+    parser.add_argument(
+        '--exclude-selectors',
+        nargs='*',
+        default=[],
+        help='CSS selectors for elements to exclude (e.g., ".comments", "#sidebar")'
+    )
+    
     args = parser.parse_args()
 
     # Create output directory if it doesn't exist
@@ -1505,7 +1538,9 @@ Copyright (c) devsimsek
             crawl=args.crawl,
             max_pages=args.max_pages,
             exclude_urls=exclude_urls,
-            include_urls=include_urls
+            include_urls=include_urls,
+            content_selector=args.content_selector,
+            exclude_selectors=args.exclude_selectors
         )
 
         results = converter.convert(formats=args.formats)
