@@ -634,9 +634,24 @@ class PDFConverter:
             spaceAfter=12
         ))
 
-        # Add cover page
+        # Add cover page (scaled to fit within margins)
         if cover_path and os.path.exists(cover_path):
-            img = Image(cover_path, width=6*inch, height=9*inch)
+            # Page dimensions minus margins
+            available_width = letter[0] - 144  # 72pt margins on each side
+            available_height = letter[1] - 144
+            
+            # Scale image to fit
+            img = Image(cover_path)
+            img_width, img_height = img.imageWidth, img.imageHeight
+            
+            # Calculate scaling to fit within available space
+            width_scale = available_width / img_width
+            height_scale = available_height / img_height
+            scale = min(width_scale, height_scale)
+            
+            img.drawWidth = img_width * scale
+            img.drawHeight = img_height * scale
+            
             story.append(img)
             story.append(PageBreak())
 
@@ -1244,16 +1259,37 @@ class Web2Ebook:
 
     def _create_multi_chapter_pdf(self, metadata, chapters, output_path, cover_path):
         """Create PDF with multiple chapters"""
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Image
         from reportlab.lib.pagesizes import letter
         from reportlab.lib.styles import getSampleStyleSheet
         from reportlab.lib.units import inch
-
+        
         doc = SimpleDocTemplate(output_path, pagesize=letter, rightMargin=72, leftMargin=72,
                                 topMargin=72, bottomMargin=72)
         story = []
         styles = getSampleStyleSheet()
-
+        
+        # Add cover page (scaled to fit within margins)
+        if cover_path and os.path.exists(cover_path):
+            # Page dimensions minus margins
+            available_width = letter[0] - 144  # 72pt margins on each side
+            available_height = letter[1] - 144
+            
+            # Scale image to fit
+            img = Image(cover_path)
+            img_width, img_height = img.imageWidth, img.imageHeight
+            
+            # Calculate scaling to fit within available space
+            width_scale = available_width / img_width
+            height_scale = available_height / img_height
+            scale = min(width_scale, height_scale)
+            
+            img.drawWidth = img_width * scale
+            img.drawHeight = img_height * scale
+            
+            story.append(img)
+            story.append(PageBreak())
+        
         # Title page
         story.append(Spacer(1, 2*inch))
         story.append(Paragraph(metadata['title'], styles['Title']))
