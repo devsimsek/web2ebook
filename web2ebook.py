@@ -670,7 +670,7 @@ class MOBIConverter:
 class Web2Ebook:
     """Main converter class"""
     
-    def __init__(self, url, output_dir=None, generate_cover=True, custom_cover=None, crawl=False, max_pages=10):
+    def __init__(self, url, output_dir=None, generate_cover=True, custom_cover=None, crawl=False, max_pages=10, exclude_urls=None):
         self.url = url
         self.output_dir = output_dir or os.getcwd()
         self.generate_cover = generate_cover
@@ -680,11 +680,42 @@ class Web2Ebook:
         self.max_pages = max_pages
         self.visited_urls = set()
         self.base_domain = self._extract_domain(url)
+        self.exclude_urls = set(exclude_urls) if exclude_urls else set()
+        self.exclude_patterns = self._compile_exclude_patterns()
     
     def _extract_domain(self, url):
         """Extract base domain from URL"""
         parsed = urlparse(url)
         return f"{parsed.scheme}://{parsed.netloc}"
+    
+    def _compile_exclude_patterns(self):
+        """Compile regex patterns from exclude URLs for pattern matching"""
+        patterns = []
+        for pattern in self.exclude_urls:
+            if '*' in pattern or '?' in pattern:
+                # Convert glob-like pattern to regex
+                regex_pattern = pattern.replace('.', r'\.').replace('*', '.*').replace('?', '.')
+                patterns.append(re.compile(regex_pattern))
+        return patterns
+    
+    def _should_exclude_url(self, url):
+        """Check if URL should be excluded"""
+        # Exact match
+        if url in self.exclude_urls:
+            return True
+        
+        # Pattern match
+        for pattern in self.exclude_patterns:
+            if pattern.match(url):
+                return True
+        
+        # Check if URL contains any exclude pattern as substring
+        for exclude in self.exclude_urls:
+            if '*' not in exclude and '?' not in exclude:
+                if exclude in url:
+                    return True
+        
+        return False
     
     def _find_links(self, soup, current_url):
         """Find all valid links on the page"""
@@ -699,6 +730,10 @@ class Web2Ebook:
                 # Skip anchors and already visited
                 if '#' in absolute_url:
                     absolute_url = absolute_url.split('#')[0]
+                
+                # Check if URL should be excluded
+                if self._should_exclude_url(absolute_url):
+                    continue
                 
                 # Only include HTML-like URLs (filter out images, PDFs, etc)
                 if self._is_html_url(absolute_url) and absolute_url not in self.visited_urls:
@@ -740,6 +775,8 @@ class Web2Ebook:
         """Convert multiple pages by crawling and combining into one ebook"""
         print(f"🕷️  Crawling from: {self.url}")
         print(f"📊 Max pages: {self.max_pages}")
+        if self.exclude_urls:
+            print(f"🚫 Excluding {len(self.exclude_urls)} URL(s)/pattern(s)")
         
         urls_to_visit = [self.url]
         self.visited_urls = set()
@@ -1207,6 +1244,18 @@ Copyright (c) devsimsek
         help='Maximum number of pages to crawl (default: 10)'
     )
     
+    parser.add_argument(
+        '--exclude',
+        nargs='*',
+        default=[],
+        help='URLs or patterns to exclude from crawling (supports wildcards)'
+    )
+    
+    parser.add_argument(
+        '--exclude-file',
+        help='File containing URLs to exclude (one per line)'
+    )
+    
     args = parser.parse_args()
     
     # Create output directory if it doesn't exist
@@ -1219,6 +1268,21 @@ Copyright (c) devsimsek
     print("=" * 60)
     print()
     
+    # Process exclude list
+    exclude_urls = list(args.exclude) if args.exclude else []
+    
+    # Load from file if provided
+    if args.exclude_file:
+        try:
+            with open(args.exclude_file, 'r') as f:
+                file_excludes = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+                exclude_urls.extend(file_excludes)
+                print(f"📄 Loaded {len(file_excludes)} exclude patterns from {args.exclude_file}")
+        except FileNotFoundError:
+            print(f"⚠️  Warning: Exclude file not found: {args.exclude_file}")
+        except Exception as e:
+            print(f"⚠️  Warning: Could not read exclude file: {e}")
+    
     try:
         converter = Web2Ebook(
             args.url,
@@ -1226,7 +1290,8 @@ Copyright (c) devsimsek
             generate_cover=not args.no_cover,
             custom_cover=args.cover,
             crawl=args.crawl,
-            max_pages=args.max_pages
+            max_pages=args.max_pages,
+            exclude_urls=exclude_urls
         )
         
         results = converter.convert(formats=args.formats)

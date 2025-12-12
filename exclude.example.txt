@@ -1,0 +1,82 @@
+# Web2Ebook - Example Exclude List
+# Copyright (c) devsimsek
+#
+# This file contains examples of URLs and patterns to exclude from crawling.
+# Lines starting with # are comments and will be ignored.
+# Empty lines are also ignored.
+
+# Exact URL matches
+# ------------------
+# Exclude specific pages you don't want in your ebook
+https://example.com/login
+https://example.com/contact
+https://example.com/privacy-policy
+
+# Pattern matching with wildcards
+# --------------------------------
+# Use * to match any characters
+# Use ? to match single character
+
+# Exclude all pages in /admin/ directory
+https://example.com/admin/*
+
+# Exclude all comment pages
+https://example.com/*/comments
+https://example.com/*comment*
+
+# Exclude pages with specific patterns
+*login*
+*signup*
+*register*
+*/feed/*
+*/rss/*
+*/api/*
+
+# Common pages to exclude
+# -----------------------
+# These are typically not useful in ebooks
+
+# Social and sharing
+*/share
+*/tweet
+*/facebook
+*/twitter
+
+# User account pages
+*/profile
+*/settings
+*/account
+
+# Navigation and structure
+*/tag/*
+*/category/*
+*/archive/*
+*/search
+
+# Interactive elements
+*/download
+*/print
+*/edit
+*/delete
+
+# Example for documentation sites
+# --------------------------------
+# Exclude index/navigation pages
+https://docs.example.com/index.html
+https://docs.example.com/sitemap.html
+https://docs.example.com/*/index.html
+
+# Example for blog sites
+# ----------------------
+# Exclude author pages and tags
+https://myblog.com/author/*
+https://myblog.com/tag/*
+https://myblog.com/page/*
+
+# Substring matching
+# ------------------
+# If no wildcards, matches anywhere in URL
+comment
+reply
+forum
+discussion

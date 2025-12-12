@@ -77,6 +77,19 @@ make run URL=https://example.com/article ARGS='--no-cover'
 make run URL=https://example.com/article ARGS='--cover my_cover.png'
 ```
 
+### 6. Exclude URLs from Crawling
+
+```bash
+# Exclude specific URLs
+make run URL=https://docs.example.com ARGS='--crawl --exclude https://docs.example.com/login https://docs.example.com/contact'
+
+# Use patterns with wildcards
+make run URL=https://example.com/blog ARGS='--crawl --exclude "*comment*" "*/tag/*" "*/admin/*"'
+
+# Load exclusions from file
+make run URL=https://example.com/docs ARGS='--crawl --exclude-file exclude.txt'
+```
+
 ## Direct Python Usage
 
 If you prefer to use Python directly:
@@ -137,11 +150,16 @@ python web2ebook.py https://example.com/article --formats epub pdf
 - No broken image links
 
 💻 **Code Block Styling:**
-
 - Dark theme for code blocks
 - Syntax-friendly colors
 - Monospace fonts
 - Proper formatting
+
+🚫 **Exclude URLs:**
+- Exclude specific URLs from crawling
+- Use wildcard patterns (* and ?)
+- Load exclusions from file
+- Perfect for skipping login, comment, admin pages
 
 ## Troubleshooting
 

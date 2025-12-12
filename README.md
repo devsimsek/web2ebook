@@ -74,6 +74,49 @@ Convert a web page to all formats (EPUB, PDF, MOBI):
 python web2ebook.py https://example.com/article
 ```
 
+### Crawl Multiple Pages
+
+Crawl and combine multiple pages into one ebook:
+
+```bash
+python web2ebook.py https://example.com/tutorial --crawl --max-pages 10
+```
+
+### Exclude URLs from Crawling
+
+**Exclude specific URLs:**
+```bash
+python web2ebook.py https://example.com/docs \
+  --crawl \
+  --exclude https://example.com/login https://example.com/contact
+```
+
+**Use wildcard patterns:**
+```bash
+python web2ebook.py https://example.com/docs \
+  --crawl \
+  --exclude '*/comments' '*login*' '*/tag/*'
+```
+
+**Load exclusions from file:**
+```bash
+python web2ebook.py https://example.com/docs \
+  --crawl \
+  --exclude-file exclude.txt
+```
+
+Example `exclude.txt`:
+```
+# Exclude login and admin pages
+https://example.com/login
+https://example.com/admin/*
+
+# Exclude by pattern
+*comment*
+*/tag/*
+*/category/*
+```
+
 ### Specify Output Formats
 
 Convert to specific formats only:
@@ -111,7 +154,10 @@ python web2ebook.py \
   https://example.com/my-article \
   --formats epub pdf \
   --output ./ebooks \
-  --cover custom_cover.jpg
+  --cover custom_cover.jpg \
+  --crawl \
+  --max-pages 20 \
+  --exclude-file exclude.txt
 ```
 
 ## Command-Line Options
@@ -129,6 +175,8 @@ optional arguments:
   --cover COVER         Path to custom cover image
   --crawl               Crawl and convert multiple pages into one ebook
   --max-pages N         Maximum number of pages to crawl (default: 10)
+  --exclude [URL ...]   URLs or patterns to exclude from crawling
+  --exclude-file FILE   File containing URLs to exclude (one per line)
 ```
 
 ## How It Works
