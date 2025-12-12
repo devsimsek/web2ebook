@@ -388,8 +388,14 @@ class ContentProcessor:
             except Exception as e:
                 print(f"Warning: Invalid content selector '{self.content_selector}': {e}")
         
-        # Try common content selectors
+        # Try common content selectors (including GitBook-specific)
         content_selectors = [
+            # GitBook selectors
+            '.page-inner',
+            '.markdown-section',
+            'section.normal',
+            '.book-body .body-inner',
+            # Standard selectors
             {'id': 'content'},
             {'class': re.compile(r'content|article|post|entry', re.I)},
             {'role': 'main'},
@@ -399,7 +405,11 @@ class ContentProcessor:
         
         for selector in content_selectors:
             if isinstance(selector, str):
-                main_content = self.soup.find(selector)
+                # Check if it's a CSS selector (contains . # [ or space)
+                if any(c in selector for c in ['.', '#', '[', ' ', '>']):
+                    main_content = self.soup.select_one(selector)
+                else:
+                    main_content = self.soup.find(selector)
             else:
                 main_content = self.soup.find(['div', 'main', 'article', 'section'], selector)
             
