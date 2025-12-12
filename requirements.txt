@@ -4,7 +4,7 @@
 # Core dependencies
 requests>=2.31.0
 beautifulsoup4>=4.12.0
-lxml>=4.9.0
+lxml>=5.0.0
 
 # EPUB generation
 ebooklib>=0.18
@@ -15,6 +15,9 @@ Pillow>=10.0.0
 
 # HTML to text conversion
 html2text>=2020.1.16
+
+# Progress display and UI
+rich>=13.0.0
 
 # Optional: For MOBI conversion (requires Calibre installed separately)
 # Calibre's ebook-convert command-line tool must be installed
