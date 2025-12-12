@@ -20,6 +20,7 @@ from datetime import datetime
 import re
 import hashlib
 import time
+import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from bs4 import BeautifulSoup
@@ -69,18 +70,29 @@ class WebPageDownloader:
             return response.text
         except requests.RequestException as e:
             raise Exception(f"Failed to download page: {e}")
-
+    
     def download_image(self, img_url):
-        """Download an image and return bytes"""
+        """Download an image and return bytes with proper content type"""
         try:
             # Make URL absolute
             if not img_url.startswith(('http://', 'https://')):
                 img_url = urljoin(self.url, img_url)
-
-            response = self.session.get(img_url, timeout=15)
+            
+            response = self.session.get(img_url, timeout=15, stream=True)
             response.raise_for_status()
-            return response.content
-        except:
+            
+            # Check if it's actually an image
+            content_type = response.headers.get('content-type', '').lower()
+            if not any(t in content_type for t in ['image/', 'octet-stream']):
+                return None
+            
+            content = response.content
+            # Verify it's not empty or too small
+            if len(content) < 100:
+                return None
+                
+            return content
+        except Exception as e:
             return None
 
 
@@ -870,16 +882,17 @@ class Web2Ebook:
                     main_content = processor.extract_main_content()
                     clean_content = processor.clean_content(main_content)
                     
-                    # Download images with threading
-                    current_status = "Downloading images..."
-                    live.update(generate_table())
-                    
+                    # Download images with threading - non-blocking
                     images = processor.get_images(clean_content)
                     image_data_list = []
                     
                     if images:
-                        with ThreadPoolExecutor(max_workers=5) as executor:
+                        current_status = f"Downloading {len(images)} images..."
+                        live.update(generate_table())
+                        
+                        with ThreadPoolExecutor(max_workers=8) as executor:
                             future_to_img = {executor.submit(downloader.download_image, img['src']): img for img in images}
+                            completed = 0
                             for future in as_completed(future_to_img):
                                 img_data = future_to_img[future]
                                 try:
@@ -887,6 +900,9 @@ class Web2Ebook:
                                     if img_bytes:
                                         img_data['bytes'] = img_bytes
                                         image_data_list.append(img_data)
+                                        completed += 1
+                                        current_status = f"Downloaded {completed}/{len(images)} images"
+                                        live.update(generate_table())
                                 except:
                                     pass
                     
@@ -916,14 +932,14 @@ class Web2Ebook:
                         
                         queue_size = len(urls_to_visit)
                     
-                    current_status = "Ready"
+                    current_status = "✓ Complete"
                     live.update(generate_table())
-                    time.sleep(0.3)  # Reduced delay
+                    time.sleep(0.1)  # Minimal delay
                 
                 except Exception as e:
-                    current_status = f"Error: {str(e)[:40]}"
+                    current_status = f"⚠ Error: {str(e)[:30]}"
                     live.update(generate_table())
-                    time.sleep(0.5)
+                    time.sleep(0.2)
                     continue
             
             current_status = f"✅ Completed! Creating ebook..."
@@ -1053,28 +1069,51 @@ class Web2Ebook:
                                 media_type="text/css", content=css)
         book.add_item(nav_css)
 
-        # Embed images
+        # Embed images with proper handling
         image_counter = 0
+        image_map = {}  # Map old src to new src
+        
         for chapter_data in chapters:
             if 'images' in chapter_data:
                 for img_data in chapter_data['images']:
-                    if 'bytes' in img_data:
+                    if 'bytes' in img_data and img_data['bytes']:
                         image_counter += 1
-                        img_name = f'image_{image_counter}.jpg'
+                        
+                        # Detect image type from content
+                        img_bytes = img_data['bytes']
+                        if img_bytes[:4] == b'\x89PNG':
+                            ext, media = 'png', 'image/png'
+                        elif img_bytes[:3] == b'\xff\xd8\xff':
+                            ext, media = 'jpg', 'image/jpeg'
+                        elif img_bytes[:6] in (b'GIF87a', b'GIF89a'):
+                            ext, media = 'gif', 'image/gif'
+                        elif img_bytes[:4] == b'RIFF' and img_bytes[8:12] == b'WEBP':
+                            ext, media = 'webp', 'image/webp'
+                        else:
+                            ext, media = 'jpg', 'image/jpeg'
+                        
+                        img_name = f'images/img_{image_counter}.{ext}'
                         img_item = epub.EpubItem(
                             uid=f"img_{image_counter}",
                             file_name=img_name,
-                            media_type='image/jpeg',
-                            content=img_data['bytes']
+                            media_type=media,
+                            content=img_bytes
                         )
                         book.add_item(img_item)
-
-                        # Replace image src in content
+                        
+                        # Map old URL to new path
                         old_src = img_data['src']
-                        chapter_data['content'] = str(chapter_data['content']).replace(
-                            f'src="{old_src}"',
-                            f'src="{img_name}"'
-                        )
+                        image_map[old_src] = img_name
+        
+        # Replace all image sources in content
+        for chapter_data in chapters:
+            content_str = str(chapter_data['content'])
+            for old_src, new_src in image_map.items():
+                # Try different quote styles
+                content_str = content_str.replace(f'src="{old_src}"', f'src="{new_src}"')
+                content_str = content_str.replace(f"src='{old_src}'", f'src="{new_src}"')
+                content_str = content_str.replace(f'src={old_src}', f'src="{new_src}"')
+            chapter_data['content'] = content_str
 
         # Create chapters
         epub_chapters = []

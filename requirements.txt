@@ -21,3 +21,5 @@ rich>=13.0.0
 
 # Optional: For MOBI conversion (requires Calibre installed separately)
 # Calibre's ebook-convert command-line tool must be installed
+# Async support
+aiohttp>=3.9.0
