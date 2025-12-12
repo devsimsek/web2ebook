@@ -1,0 +1,88 @@
+# Web2Ebook - Example Include List
+# Copyright (c) devsimsek
+#
+# This file contains examples of URLs and patterns to INCLUDE during crawling.
+# Only URLs matching these patterns will be crawled (whitelist approach).
+# Lines starting with # are comments and will be ignored.
+# Empty lines are also ignored.
+
+# Use Case: Only crawl specific chapters
+# ----------------------------------------
+
+# Exact URL matches
+# Only crawl these specific pages
+https://example.com/chapter-1.html
+https://example.com/chapter-2.html
+https://example.com/chapter-3.html
+
+# Pattern matching with wildcards
+# --------------------------------
+# Use * to match any characters
+# Use ? to match single character
+
+# Include all chapter pages (but not other pages)
+https://example.com/chapter-*.html
+*/chapter-*.html
+
+# Include all pages in a specific directory
+https://docs.example.com/guide/*
+https://docs.example.com/tutorial/*
+
+# Include pages with specific patterns
+*-chapter-*
+*/part-*/*.html
+
+# Example: Crafting Interpreters Book
+# ------------------------------------
+# Only crawl actual chapter content, skip navigation
+https://craftinginterpreters.com/welcome.html
+https://craftinginterpreters.com/introduction.html
+https://craftinginterpreters.com/a-map-of-the-territory.html
+https://craftinginterpreters.com/the-lox-language.html
+https://craftinginterpreters.com/scanning.html
+https://craftinginterpreters.com/representing-code.html
+https://craftinginterpreters.com/parsing-expressions.html
+https://craftinginterpreters.com/evaluating-expressions.html
+https://craftinginterpreters.com/statements-and-state.html
+https://craftinginterpreters.com/control-flow.html
+
+# Or use a pattern to match all chapters
+# https://craftinginterpreters.com/*.html
+
+# Example: Documentation Site
+# ----------------------------
+# Only include pages in the /docs/ path
+https://example.com/docs/*
+
+# Only include numbered sections
+https://example.com/docs/section-*.html
+
+# Example: Blog Series
+# ---------------------
+# Include all posts in a specific series
+https://myblog.com/2024/*/tutorial-series-part-*.html
+https://myblog.com/series/python-basics/*
+
+# Substring matching
+# ------------------
+# If no wildcards, matches anywhere in URL
+chapter
+tutorial
+guide
+
+# Combined with Exclude
+# ----------------------
+# You can use both --include and --exclude together
+# Include patterns are applied first, then exclude patterns
+# 
+# Example:
+#   --include "*/chapter-*.html" --exclude "*/chapter-appendix-*.html"
+#   This will include all chapters but exclude appendix chapters
+
+# Tips
+# ----
+# 1. Include is a whitelist - ONLY matching URLs will be crawled
+# 2. If no include patterns specified, all URLs are considered
+# 3. Include is checked before exclude
+# 4. Use include to target specific content areas
+# 5. Combine with --max-pages to limit the crawl

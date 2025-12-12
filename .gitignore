@@ -148,6 +148,7 @@ my_ebooks/
 ebooks/
 test_output/
 exclude.txt
+include.txt
 
 # Temporary files
 *.tmp

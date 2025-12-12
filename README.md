@@ -117,6 +117,49 @@ https://example.com/admin/*
 */category/*
 ```
 
+### Include URLs for Targeted Crawling
+
+**Include specific URLs only (whitelist):**
+```bash
+python web2ebook.py https://example.com/docs \
+  --crawl \
+  --include https://example.com/chapter-1.html https://example.com/chapter-2.html
+```
+
+**Use wildcard patterns to target specific content:**
+```bash
+python web2ebook.py https://example.com/docs \
+  --crawl \
+  --include '*/chapter-*.html' 'https://example.com/docs/guide/*'
+```
+
+**Load inclusions from file:**
+```bash
+python web2ebook.py https://example.com/docs \
+  --crawl \
+  --include-file include.txt
+```
+
+Example `include.txt`:
+```
+# Only crawl chapters, skip navigation
+https://example.com/chapter-*.html
+*/tutorial/part-*.html
+
+# Or specific pages
+https://example.com/intro.html
+https://example.com/conclusion.html
+```
+
+**Combine include and exclude:**
+```bash
+# Include all chapters but exclude appendix chapters
+python web2ebook.py https://example.com/book \
+  --crawl \
+  --include '*/chapter-*.html' \
+  --exclude '*/chapter-appendix-*.html'
+```
+
 ### Specify Output Formats
 
 Convert to specific formats only:
@@ -177,6 +220,8 @@ optional arguments:
   --max-pages N         Maximum number of pages to crawl (default: 10)
   --exclude [URL ...]   URLs or patterns to exclude from crawling
   --exclude-file FILE   File containing URLs to exclude (one per line)
+  --include [URL ...]   URLs or patterns to include when crawling (whitelist)
+  --include-file FILE   File containing URLs to include (one per line)
 ```
 
 ## How It Works
