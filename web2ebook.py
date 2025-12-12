@@ -636,24 +636,44 @@ class PDFConverter:
 
         # Add cover page (scaled to fit within margins)
         if cover_path and os.path.exists(cover_path):
-            # Page dimensions minus margins
-            available_width = letter[0] - 144  # 72pt margins on each side
-            available_height = letter[1] - 144
-            
-            # Scale image to fit
-            img = Image(cover_path)
-            img_width, img_height = img.imageWidth, img.imageHeight
-            
-            # Calculate scaling to fit within available space
-            width_scale = available_width / img_width
-            height_scale = available_height / img_height
-            scale = min(width_scale, height_scale)
-            
-            img.drawWidth = img_width * scale
-            img.drawHeight = img_height * scale
-            
-            story.append(img)
-            story.append(PageBreak())
+            try:
+                # Page dimensions minus margins
+                available_width = letter[0] - 144  # 72pt margins on each side
+                available_height = letter[1] - 144
+                
+                # Create image and get dimensions
+                img = Image(cover_path)
+                
+                # Ensure we have valid dimensions
+                if not hasattr(img, 'imageWidth') or not hasattr(img, 'imageHeight'):
+                    raise ValueError("Could not get image dimensions")
+                
+                img_width = float(img.imageWidth)
+                img_height = float(img.imageHeight)
+                
+                if img_width <= 0 or img_height <= 0:
+                    raise ValueError(f"Invalid image dimensions: {img_width}x{img_height}")
+                
+                # Calculate scaling to fit within available space
+                width_scale = available_width / img_width
+                height_scale = available_height / img_height
+                scale = min(width_scale, height_scale, 1.0)  # Don't upscale
+                
+                # Set final dimensions
+                img.drawWidth = img_width * scale
+                img.drawHeight = img_height * scale
+                
+                # Verify final size fits
+                if img.drawHeight > available_height or img.drawWidth > available_width:
+                    # Force fit with more aggressive scaling
+                    img.drawWidth = available_width * 0.9
+                    img.drawHeight = available_height * 0.9
+                
+                story.append(img)
+                story.append(PageBreak())
+            except Exception as e:
+                print(f"Warning: Could not add cover to PDF: {e}")
+                # Continue without cover
 
         # Add title page
         story.append(Spacer(1, 2*inch))
@@ -1271,24 +1291,44 @@ class Web2Ebook:
         
         # Add cover page (scaled to fit within margins)
         if cover_path and os.path.exists(cover_path):
-            # Page dimensions minus margins
-            available_width = letter[0] - 144  # 72pt margins on each side
-            available_height = letter[1] - 144
-            
-            # Scale image to fit
-            img = Image(cover_path)
-            img_width, img_height = img.imageWidth, img.imageHeight
-            
-            # Calculate scaling to fit within available space
-            width_scale = available_width / img_width
-            height_scale = available_height / img_height
-            scale = min(width_scale, height_scale)
-            
-            img.drawWidth = img_width * scale
-            img.drawHeight = img_height * scale
-            
-            story.append(img)
-            story.append(PageBreak())
+            try:
+                # Page dimensions minus margins
+                available_width = letter[0] - 144  # 72pt margins on each side
+                available_height = letter[1] - 144
+                
+                # Create image and get dimensions
+                img = Image(cover_path)
+                
+                # Ensure we have valid dimensions
+                if not hasattr(img, 'imageWidth') or not hasattr(img, 'imageHeight'):
+                    raise ValueError("Could not get image dimensions")
+                
+                img_width = float(img.imageWidth)
+                img_height = float(img.imageHeight)
+                
+                if img_width <= 0 or img_height <= 0:
+                    raise ValueError(f"Invalid image dimensions: {img_width}x{img_height}")
+                
+                # Calculate scaling to fit within available space
+                width_scale = available_width / img_width
+                height_scale = available_height / img_height
+                scale = min(width_scale, height_scale, 1.0)  # Don't upscale
+                
+                # Set final dimensions
+                img.drawWidth = img_width * scale
+                img.drawHeight = img_height * scale
+                
+                # Verify final size fits
+                if img.drawHeight > available_height or img.drawWidth > available_width:
+                    # Force fit with more aggressive scaling
+                    img.drawWidth = available_width * 0.9
+                    img.drawHeight = available_height * 0.9
+                
+                story.append(img)
+                story.append(PageBreak())
+            except Exception as e:
+                print(f"Warning: Could not add cover to PDF: {e}")
+                # Continue without cover
         
         # Title page
         story.append(Spacer(1, 2*inch))
