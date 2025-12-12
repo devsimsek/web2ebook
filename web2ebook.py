@@ -1,0 +1,1251 @@
+#!/usr/bin/env python3
+"""
+web2ebook - Convert web pages to ebook formats (EPUB, PDF, MOBI)
+
+Copyright (c) devsimsek
+
+This script downloads web pages and converts them into readable ebook formats
+while preserving styling, metadata, and generating optional cover images.
+"""
+
+import os
+import sys
+import argparse
+import requests
+import tempfile
+import shutil
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+from datetime import datetime
+import re
+import hashlib
+import time
+
+from bs4 import BeautifulSoup
+from ebooklib import epub
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+from reportlab.pdfgen import canvas
+from PIL import Image as PILImage, ImageDraw, ImageFont
+import html2text
+
+
+class WebPageDownloader:
+    """Downloads and processes web pages with assets"""
+    
+    def __init__(self, url, user_agent=None):
+        self.url = url
+        self.base_url = self._get_base_url(url)
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': user_agent or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+    def _get_base_url(self, url):
+        """Extract base URL from full URL"""
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}"
+    
+    def download(self):
+        """Download the web page content"""
+        try:
+            response = self.session.get(self.url, timeout=30)
+            response.raise_for_status()
+            return response.text
+        except requests.RequestException as e:
+            raise Exception(f"Failed to download page: {e}")
+    
+    def download_image(self, img_url):
+        """Download an image and return bytes"""
+        try:
+            # Make URL absolute
+            if not img_url.startswith(('http://', 'https://')):
+                img_url = urljoin(self.url, img_url)
+            
+            response = self.session.get(img_url, timeout=15)
+            response.raise_for_status()
+            return response.content
+        except:
+            return None
+
+
+class MetadataExtractor:
+    """Extract metadata from web pages"""
+    
+    def __init__(self, soup, url):
+        self.soup = soup
+        self.url = url
+        
+    def extract(self):
+        """Extract all relevant metadata"""
+        metadata = {
+            'title': self._get_title(),
+            'author': self._get_author(),
+            'description': self._get_description(),
+            'publisher': self._get_publisher(),
+            'date': self._get_date(),
+            'language': self._get_language(),
+            'keywords': self._get_keywords(),
+            'url': self.url
+        }
+        return metadata
+    
+    def _get_title(self):
+        """Extract page title"""
+        # Try Open Graph
+        og_title = self.soup.find('meta', property='og:title')
+        if og_title and og_title.get('content'):
+            return self._clean_title(og_title['content'])
+        
+        # Try Twitter Card
+        twitter_title = self.soup.find('meta', attrs={'name': 'twitter:title'})
+        if twitter_title and twitter_title.get('content'):
+            return self._clean_title(twitter_title['content'])
+        
+        # Try regular title tag
+        title_tag = self.soup.find('title')
+        if title_tag:
+            return self._clean_title(title_tag.get_text().strip())
+        
+        # Try first h1 tag
+        h1_tag = self.soup.find('h1')
+        if h1_tag:
+            return self._clean_title(h1_tag.get_text().strip())
+        
+        return "Untitled Document"
+    
+    def _clean_title(self, title):
+        """Clean up title by removing version numbers and weird formatting"""
+        if not title:
+            return "Untitled Document"
+        
+        # Remove version numbers at the start (e.g., "30.3.7", "1.2.3")
+        title = re.sub(r'^\d+(\.\d+)*\.?\s*', '', title)
+        
+        # Remove common separators and site names at the end
+        title = re.split(r'\s*[\|•·\-–—]\s*', title)[0]
+        
+        # Clean up whitespace
+        title = re.sub(r'\s+', ' ', title).strip()
+        
+        # Capitalize first letter if all lowercase or all uppercase
+        if title.islower() or title.isupper():
+            title = title.title()
+        
+        return title or "Untitled Document"
+    
+    def _get_author(self):
+        """Extract author information"""
+        # Try meta author tag
+        author_tag = self.soup.find('meta', attrs={'name': 'author'})
+        if author_tag and author_tag.get('content'):
+            return author_tag['content']
+        
+        # Try article:author
+        article_author = self.soup.find('meta', property='article:author')
+        if article_author and article_author.get('content'):
+            return article_author['content']
+        
+        # Try to find author in common HTML patterns
+        author_selectors = [
+            {'class': re.compile(r'author', re.I)},
+            {'itemprop': 'author'}
+        ]
+        
+        for selector in author_selectors:
+            author_elem = self.soup.find(['span', 'div', 'a', 'p'], selector)
+            if author_elem:
+                return author_elem.get_text().strip()
+        
+        return "Unknown Author"
+    
+    def _get_description(self):
+        """Extract page description"""
+        # Try meta description
+        desc_tag = self.soup.find('meta', attrs={'name': 'description'})
+        if desc_tag and desc_tag.get('content'):
+            return desc_tag['content']
+        
+        # Try Open Graph
+        og_desc = self.soup.find('meta', property='og:description')
+        if og_desc and og_desc.get('content'):
+            return og_desc['content']
+        
+        return ""
+    
+    def _get_publisher(self):
+        """Extract publisher information"""
+        publisher_tag = self.soup.find('meta', property='og:site_name')
+        if publisher_tag and publisher_tag.get('content'):
+            return publisher_tag['content']
+        
+        # Try to extract from URL
+        parsed = urlparse(self.url)
+        return parsed.netloc
+    
+    def _get_date(self):
+        """Extract publication date"""
+        # Try article:published_time
+        date_tag = self.soup.find('meta', property='article:published_time')
+        if date_tag and date_tag.get('content'):
+            return date_tag['content']
+        
+        # Try time tag
+        time_tag = self.soup.find('time')
+        if time_tag and time_tag.get('datetime'):
+            return time_tag['datetime']
+        
+        return datetime.now().isoformat()
+    
+    def _get_language(self):
+        """Extract language"""
+        html_tag = self.soup.find('html')
+        if html_tag and html_tag.get('lang'):
+            return html_tag['lang']
+        
+        lang_tag = self.soup.find('meta', attrs={'http-equiv': 'content-language'})
+        if lang_tag and lang_tag.get('content'):
+            return lang_tag['content']
+        
+        return 'en'
+    
+    def _get_keywords(self):
+        """Extract keywords"""
+        keywords_tag = self.soup.find('meta', attrs={'name': 'keywords'})
+        if keywords_tag and keywords_tag.get('content'):
+            return keywords_tag['content']
+        
+        return ""
+
+
+class CoverGenerator:
+    """Generate ebook covers from metadata"""
+    
+    def __init__(self, metadata, width=800, height=1200):
+        self.metadata = metadata
+        self.width = width
+        self.height = height
+        
+    def generate(self, output_path):
+        """Generate a cover image"""
+        # Create a new image with a gradient background
+        img = PILImage.new('RGB', (self.width, self.height), color='#2c3e50')
+        draw = ImageDraw.Draw(img)
+        
+        # Create gradient effect
+        for i in range(self.height):
+            shade = int(44 + (62 - 44) * (i / self.height))
+            color = f'#{shade:02x}3e50'
+            draw.line([(0, i), (self.width, i)], fill=color)
+        
+        # Add decorative border
+        border_width = 20
+        draw.rectangle(
+            [border_width, border_width, self.width - border_width, self.height - border_width],
+            outline='#ecf0f1',
+            width=3
+        )
+        
+        # Try to load fonts, fallback to default
+        try:
+            title_font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 60)
+            author_font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 40)
+            meta_font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 30)
+        except:
+            try:
+                title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 60)
+                author_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 40)
+                meta_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+            except:
+                title_font = ImageFont.load_default()
+                author_font = ImageFont.load_default()
+                meta_font = ImageFont.load_default()
+        
+        # Draw title (wrap text if too long)
+        title = self.metadata.get('title', 'Untitled')
+        title_lines = self._wrap_text(title, title_font, self.width - 100)
+        
+        y_position = 300
+        for line in title_lines:
+            bbox = draw.textbbox((0, 0), line, font=title_font)
+            text_width = bbox[2] - bbox[0]
+            x_position = (self.width - text_width) // 2
+            draw.text((x_position, y_position), line, fill='#ecf0f1', font=title_font)
+            y_position += 80
+        
+        # Draw author
+        author = self.metadata.get('author', 'Unknown Author')
+        bbox = draw.textbbox((0, 0), author, font=author_font)
+        text_width = bbox[2] - bbox[0]
+        x_position = (self.width - text_width) // 2
+        draw.text((x_position, y_position + 50), author, fill='#bdc3c7', font=author_font)
+        
+        # Draw publisher at bottom
+        publisher = self.metadata.get('publisher', '')
+        if publisher:
+            bbox = draw.textbbox((0, 0), publisher, font=meta_font)
+            text_width = bbox[2] - bbox[0]
+            x_position = (self.width - text_width) // 2
+            draw.text((x_position, self.height - 100), publisher, fill='#95a5a6', font=meta_font)
+        
+        # Save the image
+        img.save(output_path, 'PNG')
+        return output_path
+    
+    def _wrap_text(self, text, font, max_width):
+        """Wrap text to fit within max_width"""
+        words = text.split()
+        lines = []
+        current_line = []
+        
+        for word in words:
+            test_line = ' '.join(current_line + [word])
+            # Create a temporary image to measure text
+            test_img = PILImage.new('RGB', (1, 1))
+            test_draw = ImageDraw.Draw(test_img)
+            bbox = test_draw.textbbox((0, 0), test_line, font=font)
+            text_width = bbox[2] - bbox[0]
+            
+            if text_width <= max_width:
+                current_line.append(word)
+            else:
+                if current_line:
+                    lines.append(' '.join(current_line))
+                current_line = [word]
+        
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        return lines[:3]  # Limit to 3 lines
+
+
+class ContentProcessor:
+    """Process and clean HTML content for ebook conversion"""
+    
+    def __init__(self, html_content, base_url):
+        self.soup = BeautifulSoup(html_content, 'html.parser')
+        self.base_url = base_url
+        
+    def extract_main_content(self):
+        """Extract main content from the page"""
+        # Remove unwanted elements
+        for element in self.soup(['script', 'style', 'nav', 'header', 'footer', 
+                                   'aside', 'iframe', 'noscript']):
+            element.decompose()
+        
+        # Try to find main content area
+        main_content = None
+        
+        # Try common content selectors
+        content_selectors = [
+            {'id': 'content'},
+            {'class': re.compile(r'content|article|post|entry', re.I)},
+            {'role': 'main'},
+            'main',
+            'article'
+        ]
+        
+        for selector in content_selectors:
+            if isinstance(selector, str):
+                main_content = self.soup.find(selector)
+            else:
+                main_content = self.soup.find(['div', 'main', 'article', 'section'], selector)
+            
+            if main_content:
+                break
+        
+        # If no main content found, use body
+        if not main_content:
+            main_content = self.soup.find('body') or self.soup
+        
+        return main_content
+    
+    def clean_content(self, content):
+        """Clean and normalize content"""
+        if not content:
+            return self.soup
+        
+        # Remove comments
+        for comment in content.find_all(string=lambda text: isinstance(text, type(lambda: None))):
+            if hasattr(comment, 'extract'):
+                comment.extract()
+        
+        # Make all URLs absolute
+        for tag in content.find_all(['a', 'img', 'link']):
+            for attr in ['href', 'src']:
+                if tag.get(attr):
+                    tag[attr] = urljoin(self.base_url, tag[attr])
+        
+        return content
+    
+    def get_images(self, content):
+        """Extract all images from content"""
+        images = []
+        for img in content.find_all('img'):
+            src = img.get('src')
+            if src:
+                images.append({
+                    'src': urljoin(self.base_url, src),
+                    'alt': img.get('alt', ''),
+                    'element': img
+                })
+        return images
+
+
+class EPUBConverter:
+    """Convert web content to EPUB format"""
+    
+    def __init__(self, metadata, content, images=None):
+        self.metadata = metadata
+        self.content = content
+        self.images = images or []
+        self.book = epub.EpubBook()
+        
+    def convert(self, output_path, cover_path=None):
+        """Create EPUB file"""
+        # Set metadata
+        book_id = hashlib.md5(self.metadata['url'].encode()).hexdigest()
+        self.book.set_identifier(book_id)
+        self.book.set_title(self.metadata['title'])
+        self.book.set_language(self.metadata['language'])
+        self.book.add_author(self.metadata['author'])
+        
+        if self.metadata.get('description'):
+            self.book.add_metadata('DC', 'description', self.metadata['description'])
+        
+        if self.metadata.get('publisher'):
+            self.book.add_metadata('DC', 'publisher', self.metadata['publisher'])
+        
+        if self.metadata.get('date'):
+            self.book.add_metadata('DC', 'date', self.metadata['date'])
+        
+        # Add cover if provided
+        if cover_path and os.path.exists(cover_path):
+            with open(cover_path, 'rb') as cover_file:
+                self.book.set_cover('cover.png', cover_file.read())
+        
+        # Add CSS for styling
+        css = '''
+@namespace epub "http://www.idpf.org/2007/ops";
+        body {
+            font-family: Georgia, serif;
+            line-height: 1.6;
+            margin: 2em;
+            color: #333;
+        }
+        h1, h2, h3, h4, h5, h6 {
+            font-family: Arial, sans-serif;
+            font-weight: bold;
+            margin-top: 1.5em;
+            margin-bottom: 0.5em;
+            line-height: 1.3;
+            color: #2c3e50;
+        }
+        h1 { font-size: 2em; }
+        h2 { font-size: 1.5em; }
+        h3 { font-size: 1.3em; }
+        p {
+            margin: 1em 0;
+            text-align: justify;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 1em auto;
+        }
+        a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        blockquote {
+            margin: 1em 2em;
+            padding: 0.5em 1em;
+            border-left: 3px solid #ccc;
+            font-style: italic;
+            background-color: #f9f9f9;
+            color: #555;
+        }
+        code {
+            font-family: "Courier New", "Consolas", monospace;
+            background-color: #f4f4f4;
+            padding: 0.2em 0.4em;
+            border-radius: 3px;
+            font-size: 0.9em;
+            color: #c7254e;
+            border: 1px solid #e1e1e8;
+        }
+        pre {
+            background-color: #2d2d2d;
+            color: #f8f8f2;
+            padding: 1em;
+            overflow-x: auto;
+            border-radius: 5px;
+            border: 1px solid #444;
+            line-height: 1.4;
+        }
+        pre code {
+            background-color: transparent;
+            padding: 0;
+            border: none;
+            color: #f8f8f2;
+            display: block;
+            font-size: 0.85em;
+        }
+        '''
+        
+        nav_css = epub.EpubItem(
+            uid="style_nav",
+            file_name="style/nav.css",
+            media_type="text/css",
+            content=css
+        )
+        self.book.add_item(nav_css)
+        
+        # Create chapter
+        chapter = epub.EpubHtml(
+            title=self.metadata['title'],
+            file_name='content.xhtml',
+            lang=self.metadata['language']
+        )
+        
+        # Process content and add images
+        content_html = str(self.content)
+        chapter.content = content_html
+        chapter.add_item(nav_css)
+        
+        self.book.add_item(chapter)
+        
+        # Add table of contents
+        self.book.toc = (epub.Link('content.xhtml', self.metadata['title'], 'content'),)
+        
+        # Add navigation files
+        self.book.add_item(epub.EpubNcx())
+        self.book.add_item(epub.EpubNav())
+        
+        # Define spine
+        self.book.spine = ['nav', chapter]
+        
+        # Write EPUB file
+        epub.write_epub(output_path, self.book, {})
+        return output_path
+
+
+class PDFConverter:
+    """Convert web content to PDF format"""
+    
+    def __init__(self, metadata, content):
+        self.metadata = metadata
+        self.content = content
+        self.h2t = html2text.HTML2Text()
+        self.h2t.body_width = 0
+        
+    def convert(self, output_path, cover_path=None):
+        """Create PDF file"""
+        doc = SimpleDocTemplate(
+            output_path,
+            pagesize=letter,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=72
+        )
+        
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Add custom styles
+        styles.add(ParagraphStyle(
+            name='CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor='#2c3e50',
+            spaceAfter=30,
+            alignment=TA_CENTER
+        ))
+        
+        styles.add(ParagraphStyle(
+            name='CustomBody',
+            parent=styles['BodyText'],
+            fontSize=11,
+            leading=16,
+            alignment=TA_JUSTIFY,
+            spaceAfter=12
+        ))
+        
+        # Add cover page
+        if cover_path and os.path.exists(cover_path):
+            img = Image(cover_path, width=6*inch, height=9*inch)
+            story.append(img)
+            story.append(PageBreak())
+        
+        # Add title page
+        story.append(Spacer(1, 2*inch))
+        story.append(Paragraph(self.metadata['title'], styles['CustomTitle']))
+        story.append(Spacer(1, 0.5*inch))
+        story.append(Paragraph(f"by {self.metadata['author']}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        if self.metadata.get('publisher'):
+            story.append(Paragraph(self.metadata['publisher'], styles['Normal']))
+        
+        story.append(PageBreak())
+        
+        # Convert HTML to text with formatting
+        text = self.h2t.handle(str(self.content))
+        
+        # Process text paragraphs
+        paragraphs = text.split('\n\n')
+        for para in paragraphs:
+            para = para.strip()
+            if para:
+                # Handle headings
+                if para.startswith('#'):
+                    level = len(para) - len(para.lstrip('#'))
+                    text = para.lstrip('#').strip()
+                    style = styles[f'Heading{min(level, 4)}']
+                    story.append(Paragraph(text, style))
+                else:
+                    # Regular paragraph
+                    # Escape special characters for reportlab
+                    para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    story.append(Paragraph(para, styles['CustomBody']))
+                
+                story.append(Spacer(1, 0.1*inch))
+        
+        # Add metadata page at the end
+        story.append(PageBreak())
+        story.append(Paragraph("Metadata", styles['Heading2']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        metadata_text = f"""
+        Title: {self.metadata['title']}<br/>
+        Author: {self.metadata['author']}<br/>
+        Source: {self.metadata['url']}<br/>
+        Date: {self.metadata['date']}<br/>
+        """
+        
+        if self.metadata.get('publisher'):
+            metadata_text += f"Publisher: {self.metadata['publisher']}<br/>"
+        
+        story.append(Paragraph(metadata_text, styles['Normal']))
+        
+        # Build PDF
+        doc.build(story)
+        return output_path
+
+
+class MOBIConverter:
+    """Convert EPUB to MOBI format using Calibre's ebook-convert"""
+    
+    def __init__(self, epub_path):
+        self.epub_path = epub_path
+        
+    def convert(self, output_path):
+        """Convert EPUB to MOBI"""
+        # Check if ebook-convert is available
+        if not shutil.which('ebook-convert'):
+            raise Exception(
+                "Calibre's ebook-convert is not installed. "
+                "Please install Calibre from https://calibre-ebook.com/"
+            )
+        
+        import subprocess
+        
+        try:
+            result = subprocess.run(
+                ['ebook-convert', self.epub_path, output_path],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return output_path
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Failed to convert to MOBI: {e.stderr}")
+
+
+class Web2Ebook:
+    """Main converter class"""
+    
+    def __init__(self, url, output_dir=None, generate_cover=True, custom_cover=None, crawl=False, max_pages=10):
+        self.url = url
+        self.output_dir = output_dir or os.getcwd()
+        self.generate_cover = generate_cover
+        self.custom_cover = custom_cover
+        self.temp_dir = None
+        self.crawl = crawl
+        self.max_pages = max_pages
+        self.visited_urls = set()
+        self.base_domain = self._extract_domain(url)
+    
+    def _extract_domain(self, url):
+        """Extract base domain from URL"""
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.netloc}"
+    
+    def _find_links(self, soup, current_url):
+        """Find all valid links on the page"""
+        links = []
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            # Make absolute
+            absolute_url = urljoin(current_url, href)
+            
+            # Only follow links from same domain
+            if absolute_url.startswith(self.base_domain):
+                # Skip anchors and already visited
+                if '#' in absolute_url:
+                    absolute_url = absolute_url.split('#')[0]
+                
+                # Only include HTML-like URLs (filter out images, PDFs, etc)
+                if self._is_html_url(absolute_url) and absolute_url not in self.visited_urls:
+                    links.append(absolute_url)
+        return links
+    
+    def _is_html_url(self, url):
+        """Check if URL likely points to an HTML page"""
+        # Remove query string and fragments
+        path = urlparse(url).path.lower()
+        
+        # Skip common non-HTML extensions
+        skip_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip', 
+                          '.mp4', '.mp3', '.css', '.js', '.xml', '.json',
+                          '.svg', '.ico', '.webp', '.bmp', '.doc', '.docx']
+        
+        for ext in skip_extensions:
+            if path.endswith(ext):
+                return False
+        
+        # If it has .html or .htm, it's HTML
+        if path.endswith(('.html', '.htm')):
+            return True
+        
+        # If no extension or ends with /, assume it's HTML
+        if not path or path.endswith('/') or '.' not in path.split('/')[-1]:
+            return True
+        
+        return False
+    
+    def convert(self, formats=['epub', 'pdf', 'mobi']):
+        """Convert web page to specified ebook formats"""
+        if self.crawl:
+            return self._convert_multiple(formats)
+        else:
+            return self._convert_single(self.url, formats)
+    
+    def _convert_multiple(self, formats):
+        """Convert multiple pages by crawling and combining into one ebook"""
+        print(f"🕷️  Crawling from: {self.url}")
+        print(f"📊 Max pages: {self.max_pages}")
+        
+        urls_to_visit = [self.url]
+        self.visited_urls = set()
+        all_chapters = []
+        main_metadata = None
+        
+        while urls_to_visit and len(self.visited_urls) < self.max_pages:
+            current_url = urls_to_visit.pop(0)
+            
+            if current_url in self.visited_urls:
+                continue
+            
+            self.visited_urls.add(current_url)
+            print(f"\n📄 [{len(self.visited_urls)}/{self.max_pages}] Crawling: {current_url}")
+            
+            try:
+                downloader = WebPageDownloader(current_url)
+                html = downloader.download()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Extract metadata from first page
+                if main_metadata is None:
+                    metadata_extractor = MetadataExtractor(soup, current_url)
+                    main_metadata = metadata_extractor.extract()
+                    # Update title to reflect it's a collection
+                    main_metadata['title'] = f"{main_metadata['title']} (Complete)"
+                    print(f"📖 Book Title: {main_metadata['title']}")
+                
+                # Process content
+                processor = ContentProcessor(html, current_url)
+                main_content = processor.extract_main_content()
+                clean_content = processor.clean_content(main_content)
+                
+                # Download and embed images
+                images = processor.get_images(clean_content)
+                image_data_list = []
+                for img_data in images:
+                    img_bytes = downloader.download_image(img_data['src'])
+                    if img_bytes:
+                        # Store image data for later embedding
+                        img_data['bytes'] = img_bytes
+                        image_data_list.append(img_data)
+                
+                # Extract chapter title
+                chapter_metadata = MetadataExtractor(soup, current_url).extract()
+                chapter_title = chapter_metadata['title']
+                
+                # Store chapter with images
+                all_chapters.append({
+                    'title': chapter_title,
+                    'content': clean_content,
+                    'url': current_url,
+                    'images': image_data_list
+                })
+                
+                print(f"   ✓ Added chapter: {chapter_title}")
+                
+                # Find more links if we haven't hit the limit
+                if len(self.visited_urls) < self.max_pages:
+                    new_links = self._find_links(soup, current_url)
+                    for link in new_links:
+                        if link not in self.visited_urls and link not in urls_to_visit:
+                            urls_to_visit.append(link)
+                
+                # Be nice to the server
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"   ❌ Failed: {e}")
+                continue
+        
+        print(f"\n✅ Crawled {len(all_chapters)} pages, creating combined ebook...")
+        
+        # Now create single ebook with all chapters
+        return self._create_combined_ebook(main_metadata, all_chapters, formats)
+    
+    def _create_combined_ebook(self, metadata, chapters, formats):
+        """Create a single ebook from multiple chapters"""
+        self.temp_dir = tempfile.mkdtemp()
+        
+        try:
+            # Handle cover
+            cover_path = None
+            if self.custom_cover and os.path.exists(self.custom_cover):
+                cover_path = self.custom_cover
+                print(f"🎨 Using custom cover")
+            elif self.generate_cover:
+                cover_path = os.path.join(self.temp_dir, 'cover.png')
+                cover_gen = CoverGenerator(metadata)
+                cover_gen.generate(cover_path)
+                print(f"🎨 Generated cover image")
+            
+            # Generate output filename
+            safe_title = re.sub(r'[^\w\s-]', '', metadata['title'])
+            safe_title = re.sub(r'[-\s]+', '_', safe_title)[:50]
+            
+            results = {}
+            
+            # Convert to EPUB
+            if 'epub' in formats:
+                epub_path = os.path.join(self.output_dir, f"{safe_title}.epub")
+                print(f"📚 Creating combined EPUB: {epub_path}")
+                self._create_multi_chapter_epub(metadata, chapters, epub_path, cover_path)
+                results['epub'] = epub_path
+                print(f"✅ EPUB created with {len(chapters)} chapters")
+            
+            # Convert to PDF
+            if 'pdf' in formats:
+                pdf_path = os.path.join(self.output_dir, f"{safe_title}.pdf")
+                print(f"📄 Creating combined PDF: {pdf_path}")
+                self._create_multi_chapter_pdf(metadata, chapters, pdf_path, cover_path)
+                results['pdf'] = pdf_path
+                print(f"✅ PDF created with {len(chapters)} chapters")
+            
+            # Convert to MOBI
+            if 'mobi' in formats:
+                if 'epub' not in results:
+                    temp_epub = os.path.join(self.temp_dir, 'temp.epub')
+                    self._create_multi_chapter_epub(metadata, chapters, temp_epub, cover_path)
+                    epub_for_mobi = temp_epub
+                else:
+                    epub_for_mobi = results['epub']
+                
+                mobi_path = os.path.join(self.output_dir, f"{safe_title}.mobi")
+                print(f"📱 Creating MOBI: {mobi_path}")
+                try:
+                    mobi_converter = MOBIConverter(epub_for_mobi)
+                    mobi_converter.convert(mobi_path)
+                    results['mobi'] = mobi_path
+                    print(f"✅ MOBI created successfully")
+                except Exception as e:
+                    print(f"⚠️  MOBI conversion failed: {e}")
+            
+            return results
+            
+        finally:
+            if self.temp_dir and os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+    
+    def _create_multi_chapter_epub(self, metadata, chapters, output_path, cover_path):
+        """Create EPUB with multiple chapters"""
+        book = epub.EpubBook()
+        
+        # Set metadata
+        book_id = hashlib.md5(metadata['url'].encode()).hexdigest()
+        book.set_identifier(book_id)
+        book.set_title(metadata['title'])
+        book.set_language(metadata['language'])
+        book.add_author(metadata['author'])
+        
+        if metadata.get('description'):
+            book.add_metadata('DC', 'description', metadata['description'])
+        if metadata.get('publisher'):
+            book.add_metadata('DC', 'publisher', metadata['publisher'])
+        if metadata.get('date'):
+            book.add_metadata('DC', 'date', metadata['date'])
+        
+        # Add cover
+        if cover_path and os.path.exists(cover_path):
+            with open(cover_path, 'rb') as cover_file:
+                book.set_cover('cover.png', cover_file.read())
+        
+        # Add CSS
+        css = '''
+        @namespace epub "http://www.idpf.org/2007/ops";
+        body { font-family: Georgia, serif; line-height: 1.6; margin: 2em; color: #333; }
+        h1, h2, h3, h4, h5, h6 { font-family: Arial, sans-serif; font-weight: bold; 
+                                 margin-top: 1.5em; margin-bottom: 0.5em; line-height: 1.3; color: #2c3e50; }
+        h1 { font-size: 2em; } h2 { font-size: 1.5em; } h3 { font-size: 1.3em; }
+        p { margin: 1em 0; text-align: justify; }
+        img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
+        a { color: #0066cc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        blockquote { margin: 1em 2em; padding-left: 1em; border-left: 3px solid #ccc; 
+                     font-style: italic; color: #555; background-color: #f9f9f9; padding: 0.5em 1em; }
+        code { font-family: "Courier New", "Consolas", monospace; background-color: #f4f4f4; 
+               padding: 0.2em 0.4em; border-radius: 3px; font-size: 0.9em; color: #c7254e; 
+               border: 1px solid #e1e1e8; }
+        pre { background-color: #2d2d2d; color: #f8f8f2; padding: 1em; overflow-x: auto; 
+              border-radius: 5px; border: 1px solid #444; line-height: 1.4; }
+        pre code { background-color: transparent; padding: 0; border: none; color: #f8f8f2; 
+                   display: block; font-size: 0.85em; }
+        ul, ol { margin: 1em 0; padding-left: 2em; }
+        li { margin: 0.5em 0; }
+        table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+        th, td { border: 1px solid #ddd; padding: 0.5em; text-align: left; }
+        th { background-color: #f4f4f4; font-weight: bold; }
+        '''
+        
+        nav_css = epub.EpubItem(uid="style_nav", file_name="style/nav.css", 
+                                media_type="text/css", content=css)
+        book.add_item(nav_css)
+        
+        # Embed images
+        image_counter = 0
+        for chapter_data in chapters:
+            if 'images' in chapter_data:
+                for img_data in chapter_data['images']:
+                    if 'bytes' in img_data:
+                        image_counter += 1
+                        img_name = f'image_{image_counter}.jpg'
+                        img_item = epub.EpubItem(
+                            uid=f"img_{image_counter}",
+                            file_name=img_name,
+                            media_type='image/jpeg',
+                            content=img_data['bytes']
+                        )
+                        book.add_item(img_item)
+                        
+                        # Replace image src in content
+                        old_src = img_data['src']
+                        chapter_data['content'] = str(chapter_data['content']).replace(
+                            f'src="{old_src}"',
+                            f'src="{img_name}"'
+                        )
+        
+        # Create chapters
+        epub_chapters = []
+        toc_entries = []
+        
+        for idx, chapter_data in enumerate(chapters, 1):
+            chapter = epub.EpubHtml(
+                title=chapter_data['title'],
+                file_name=f'chapter_{idx}.xhtml',
+                lang=metadata['language']
+            )
+            
+            # Process content to improve code blocks
+            content_html = str(chapter_data['content'])
+            
+            # Wrap code blocks better - find <pre> tags without <code> inside
+            content_html = re.sub(
+                r'<pre(?![^>]*class=["\'])(.*?)>(.*?)</pre>',
+                r'<pre\1><code>\2</code></pre>',
+                content_html,
+                flags=re.DOTALL
+            )
+            
+            chapter.content = f"<h1>{chapter_data['title']}</h1>" + content_html
+            chapter.add_item(nav_css)
+            
+            book.add_item(chapter)
+            epub_chapters.append(chapter)
+            toc_entries.append(epub.Link(f'chapter_{idx}.xhtml', chapter_data['title'], f'ch{idx}'))
+        
+        # Set table of contents
+        book.toc = tuple(toc_entries)
+        
+        # Add navigation
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        
+        # Define spine
+        book.spine = ['nav'] + epub_chapters
+        
+        # Write file
+        epub.write_epub(output_path, book, {})
+    
+    def _create_multi_chapter_pdf(self, metadata, chapters, output_path, cover_path):
+        """Create PDF with multiple chapters"""
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import inch
+        
+        doc = SimpleDocTemplate(output_path, pagesize=letter, rightMargin=72, leftMargin=72,
+                                topMargin=72, bottomMargin=72)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Title page
+        story.append(Spacer(1, 2*inch))
+        story.append(Paragraph(metadata['title'], styles['Title']))
+        story.append(Spacer(1, 0.5*inch))
+        story.append(Paragraph(f"by {metadata['author']}", styles['Normal']))
+        if metadata.get('publisher'):
+            story.append(Spacer(1, 0.3*inch))
+            story.append(Paragraph(metadata['publisher'], styles['Normal']))
+        story.append(PageBreak())
+        
+        # Add chapters
+        h2t = html2text.HTML2Text()
+        h2t.body_width = 0
+        
+        for idx, chapter_data in enumerate(chapters, 1):
+            # Chapter title
+            story.append(Paragraph(f"Chapter {idx}: {chapter_data['title']}", styles['Heading1']))
+            story.append(Spacer(1, 0.3*inch))
+            
+            # Chapter content
+            text = h2t.handle(str(chapter_data['content']))
+            paragraphs = text.split('\n\n')
+            
+            for para in paragraphs:
+                para = para.strip()
+                if para:
+                    if para.startswith('#'):
+                        level = len(para) - len(para.lstrip('#'))
+                        text = para.lstrip('#').strip()
+                        style = styles[f'Heading{min(level, 4)}']
+                        story.append(Paragraph(text, style))
+                    elif para.startswith('```') or para.startswith('    '):
+                        # Code block - use Preformatted style
+                        code_text = para.strip('`').strip()
+                        # Escape for XML
+                        code_text = code_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        story.append(Paragraph(f'<font name="Courier" size="9">{code_text}</font>', 
+                                             styles['Code']))
+                    else:
+                        para = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                        story.append(Paragraph(para, styles['BodyText']))
+                    story.append(Spacer(1, 0.1*inch))
+            
+            # Page break between chapters
+            if idx < len(chapters):
+                story.append(PageBreak())
+        
+        doc.build(story)
+    
+    def _convert_single(self, url, formats):
+        """Convert a single page to ebook formats"""
+        # Create temporary directory
+        self.temp_dir = tempfile.mkdtemp()
+        
+        try:
+            # Download web page
+            downloader = WebPageDownloader(url)
+            html_content = downloader.download()
+            
+            # Parse and extract metadata
+            soup = BeautifulSoup(html_content, 'html.parser')
+            metadata_extractor = MetadataExtractor(soup, url)
+            metadata = metadata_extractor.extract()
+            
+            print(f"📖 Title: {metadata['title']}")
+            print(f"✍️  Author: {metadata['author']}")
+            
+            # Process content
+            processor = ContentProcessor(html_content, url)
+            main_content = processor.extract_main_content()
+            clean_content = processor.clean_content(main_content)
+            
+            # Handle cover
+            cover_path = None
+            if self.custom_cover and os.path.exists(self.custom_cover):
+                cover_path = self.custom_cover
+                print(f"🎨 Using custom cover: {self.custom_cover}")
+            elif self.generate_cover:
+                cover_path = os.path.join(self.temp_dir, 'cover.png')
+                cover_gen = CoverGenerator(metadata)
+                cover_gen.generate(cover_path)
+                print(f"🎨 Generated cover image")
+            
+            # Generate output filename
+            safe_title = re.sub(r'[^\w\s-]', '', metadata['title'])
+            safe_title = re.sub(r'[-\s]+', '_', safe_title)[:50]
+            
+            results = {}
+            
+            # Convert to EPUB
+            if 'epub' in formats:
+                epub_path = os.path.join(self.output_dir, f"{safe_title}.epub")
+                print(f"📚 Creating EPUB: {epub_path}")
+                epub_converter = EPUBConverter(metadata, clean_content)
+                epub_converter.convert(epub_path, cover_path)
+                results['epub'] = epub_path
+                print(f"✅ EPUB created successfully")
+            
+            # Convert to PDF
+            if 'pdf' in formats:
+                pdf_path = os.path.join(self.output_dir, f"{safe_title}.pdf")
+                print(f"📄 Creating PDF: {pdf_path}")
+                pdf_converter = PDFConverter(metadata, clean_content)
+                pdf_converter.convert(pdf_path, cover_path)
+                results['pdf'] = pdf_path
+                print(f"✅ PDF created successfully")
+            
+            # Convert to MOBI
+            if 'mobi' in formats:
+                if 'epub' not in results:
+                    # Need to create EPUB first
+                    temp_epub = os.path.join(self.temp_dir, 'temp.epub')
+                    epub_converter = EPUBConverter(metadata, clean_content)
+                    epub_converter.convert(temp_epub, cover_path)
+                    epub_for_mobi = temp_epub
+                else:
+                    epub_for_mobi = results['epub']
+                
+                mobi_path = os.path.join(self.output_dir, f"{safe_title}.mobi")
+                print(f"📱 Creating MOBI: {mobi_path}")
+                try:
+                    mobi_converter = MOBIConverter(epub_for_mobi)
+                    mobi_converter.convert(mobi_path)
+                    results['mobi'] = mobi_path
+                    print(f"✅ MOBI created successfully")
+                except Exception as e:
+                    print(f"⚠️  MOBI conversion failed: {e}")
+            
+            return results
+            
+        finally:
+            # Cleanup
+            if self.temp_dir and os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+
+
+def main():
+    """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description='Convert web pages to ebook formats (EPUB, PDF, MOBI)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s https://example.com/article
+  %(prog)s https://example.com/article --formats epub pdf
+  %(prog)s https://example.com/article --no-cover
+  %(prog)s https://example.com/article --cover my_cover.png
+  %(prog)s https://example.com/article -o /path/to/output
+
+Copyright (c) devsimsek
+        """
+    )
+    
+    parser.add_argument(
+        'url',
+        help='URL of the web page to convert'
+    )
+    
+    parser.add_argument(
+        '-f', '--formats',
+        nargs='+',
+        choices=['epub', 'pdf', 'mobi'],
+        default=['epub', 'pdf', 'mobi'],
+        help='Output formats (default: all formats)'
+    )
+    
+    parser.add_argument(
+        '-o', '--output',
+        help='Output directory (default: current directory)',
+        default=None
+    )
+    
+    parser.add_argument(
+        '--no-cover',
+        action='store_true',
+        help='Do not generate a cover image'
+    )
+    
+    parser.add_argument(
+        '--cover',
+        help='Path to custom cover image',
+        default=None
+    )
+    
+    parser.add_argument(
+        '--crawl',
+        action='store_true',
+        help='Crawl and convert multiple pages from the starting URL'
+    )
+    
+    parser.add_argument(
+        '--max-pages',
+        type=int,
+        default=10,
+        help='Maximum number of pages to crawl (default: 10)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Create output directory if it doesn't exist
+    if args.output:
+        os.makedirs(args.output, exist_ok=True)
+    
+    print("=" * 60)
+    print("Web2Ebook Converter")
+    print("Copyright (c) devsimsek")
+    print("=" * 60)
+    print()
+    
+    try:
+        converter = Web2Ebook(
+            args.url,
+            output_dir=args.output,
+            generate_cover=not args.no_cover,
+            custom_cover=args.cover,
+            crawl=args.crawl,
+            max_pages=args.max_pages
+        )
+        
+        results = converter.convert(formats=args.formats)
+        
+        print()
+        print("=" * 60)
+        print("✨ Conversion completed successfully!")
+        print("=" * 60)
+        print("\nGenerated files:")
+        for format_type, path in results.items():
+            print(f"  {format_type.upper()}: {path}")
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Conversion cancelled by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

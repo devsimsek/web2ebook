@@ -1,0 +1,38 @@
+Web2Ebook Project Structure
+============================
+
+Essential Files:
+├── web2ebook.py          # Main converter script (45KB)
+├── utils.py              # Utility functions (12KB)
+├── requirements.txt      # Python dependencies
+├── Makefile              # Quick commands (make install, make run, etc.)
+├── README.md             # Full documentation
+├── QUICKSTART.md         # Quick start guide
+├── LICENSE               # MIT License
+├── .gitignore            # Git ignore rules
+├── setup.py              # Package installer
+├── test_installation.py  # Installation test
+└── examples.py           # Usage examples
+
+Generated (not in git):
+├── .venv/                # Virtual environment (auto-created)
+├── *.epub                # Generated ebooks
+├── *.pdf                 # Generated ebooks
+└── *.mobi                # Generated ebooks
+
+Quick Start:
+1. make install           # Creates venv, installs deps
+2. make test              # Verify installation
+3. make run URL=<url>     # Convert a page
+
+Features:
+✓ Single page conversion
+✓ Multi-page crawling (--crawl)
+✓ EPUB, PDF, MOBI formats
+✓ Auto cover generation
+✓ Image embedding
+✓ Clean page titles
+✓ Code block styling
+✓ Smart HTML filtering
+
+Note: Generated using proprietary LLM by devsimsek (checkpoint: v9.3, revision: 0jk356)
