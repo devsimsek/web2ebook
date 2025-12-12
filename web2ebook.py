@@ -817,24 +817,27 @@ class Web2Ebook:
 
     def _should_exclude_url(self, url):
         """Check if URL should be excluded"""
-        # Exact match
+        # Exact match (including trailing slash variations)
         if url in self.exclude_urls:
             return True
-
+        if url.rstrip('/') in self.exclude_urls or url.rstrip('/') + '/' in self.exclude_urls:
+            return True
+        
         # Pattern match
         for pattern in self.exclude_patterns:
             if pattern.match(url):
                 return True
-
-        # Substring matching only for patterns without wildcards and without protocol
-        # This prevents "https://example.com/" from matching "https://example.com/page.html"
+        
+        # Substring matching only for non-URL patterns
         for exclude in self.exclude_urls:
             if '*' not in exclude and '?' not in exclude:
-                # Only do substring match if exclude pattern doesn't look like a full URL
+                # Only do substring match if it's NOT a full URL path
+                # (doesn't start with http and doesn't end with /)
                 if not exclude.startswith('http://') and not exclude.startswith('https://'):
-                    if exclude in url:
-                        return True
-
+                    if not exclude.endswith('/'):
+                        if exclude in url:
+                            return True
+        
         return False
     
     def _should_include_url(self, url):
@@ -1072,6 +1075,24 @@ class Web2Ebook:
             time.sleep(1)
         
         console.print(f"\n[bold green]✅ Crawled {len(all_chapters)} pages in {int(time.time() - start_time)}s[/bold green]")
+        
+        # Check if we actually got any chapters
+        if not all_chapters:
+            console.print("[bold red]❌ No pages were crawled![/bold red]")
+            console.print("[yellow]Possible reasons:[/yellow]")
+            console.print("  • Starting URL was excluded by filters")
+            console.print("  • No links found matching include patterns")
+            console.print("  • All discovered links were excluded")
+            console.print("\n[cyan]Try:[/cyan]")
+            console.print("  • Check your --include and --exclude patterns")
+            console.print("  • Start from a different URL")
+            console.print("  • Remove filters to see what gets crawled")
+            return {}
+        
+        if not main_metadata:
+            console.print("[bold red]❌ No metadata extracted![/bold red]")
+            return {}
+        
         console.print(f"[cyan]📚 Creating combined ebook...[/cyan]\n")
         
         # Now create single ebook with all chapters
