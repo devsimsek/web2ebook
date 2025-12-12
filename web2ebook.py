@@ -1067,6 +1067,11 @@ class Web2Ebook:
                 except Exception as e:
                     current_status = f"⚠ Error: {str(e)[:30]}"
                     live.update(generate_table())
+                    # Print full error for debugging
+                    console.print(f"\n[bold red]Error processing {current_url}:[/bold red]")
+                    console.print(f"[red]{str(e)}[/red]")
+                    import traceback
+                    console.print(f"[dim]{traceback.format_exc()}[/dim]")
                     time.sleep(0.2)
                     continue
             
